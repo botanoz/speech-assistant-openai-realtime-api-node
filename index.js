@@ -108,12 +108,12 @@ const LOG_EVENT_TYPES = [
 const SHOW_TIMING_MATH = false;
 
 // -------------------- GERÇEK KONUŞMA AYARLARI --------------------
-const BARGE_IN_GRACE_MS = 400; // Çok kısa tolerans
-const MIN_ASSISTANT_MS_BEFORE_BARGE = 600; // Hızlı kesme izni
+const BARGE_IN_GRACE_MS = 700; // Çok kısa tolerans
+const MIN_ASSISTANT_MS_BEFORE_BARGE = 1000; // Hızlı kesme izni
 
 // Ara ses kontrolü
 let lastBackchannelTime = 0;
-const BACKCHANNEL_INTERVAL = 3000; // 3 saniyede bir
+const BACKCHANNEL_INTERVAL = 5000; // 5 saniyede bir
 
 // Kullanıcı bilgileri saklama (session boyunca)
 let userContext = {
@@ -307,16 +307,16 @@ fastify.register(async (fastify) => {
         session: {
           turn_detection: { 
             type: 'server_vad',
-            threshold: 0.2, // Çok hassas
-            prefix_padding_ms: 100,
-            silence_duration_ms: 300 // Çok kısa sessizlik
+            threshold: 0.5, // Çok hassas
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500 // Çok kısa sessizlik
           },
           input_audio_format: 'g711_ulaw',
           output_audio_format: 'g711_ulaw',
           voice: VOICE,
           modalities: ['text', 'audio'],
-          temperature: 0.95, // Maksimum doğallık
-          max_response_output_tokens: 100, // Çok kısa yanıtlar
+          temperature: 0.85, // Maksimum doğallık
+          max_response_output_tokens: 140, // Çok kısa yanıtlar
           instructions: SYSTEM_MESSAGE + `\n\nKULLANICI BİLGİLERİ:\n${userContext.name ? `İsmi: ${userContext.name}` : 'İsmi henüz bilinmiyor'}\n${userContext.location ? `Konum: ${userContext.location}` : ''}\nKonuşma sayısı: ${userContext.interactionCount}`,
           tools: TOOLS,
           tool_choice: 'auto'
