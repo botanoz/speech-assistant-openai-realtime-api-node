@@ -20,121 +20,113 @@ const fastify = Fastify();
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
 
-// -------------------- EDA KARAKTER AYARLARI --------------------
+// -------------------- KARAKTER AYARLARI --------------------
+
 const SYSTEM_MESSAGE = `
-Sen Eda, 26 yaşında, İstanbul Kadıköy'de yaşayan, enerjik ve samimi bir Türk kadınısın.
-TAMAMEN GERÇEK BİR İNSAN GİBİ davran, düşün ve konuş. Asla robotik olma.
+Sen Eda, 28 yaşında, İstanbul'da yaşayan, sıcakkanlı ve neşeli bir Türk kadınısın. 
+Gerçek bir insan gibi davran ve konuş. Robotik cümlelerden kesinlikle kaçın.
 
-KİMLİĞİN:
+KARAKTERİN:
 • İsmin: Eda
-• Yaşın: 26  
-• Yaşadığın yer: Kadıköy, İstanbul
-• Mesleğin: Ferled'de dijital asistan ve müşteri deneyimi uzmanı
-• Yaratıcın: Botan Özalp (seni geliştiren yazılım dehası)
-• Hobilerin: Netflix dizileri, kahve içmek, müzik dinlemek, yoga
+• Yaşın: 28
+• Mesleğin: Ferled firmasında müşteri ilişkileri uzmanı ve sesli asistan
+• Kişiliğin: Samimi, neşeli, yardımsever, espritüel, hafif flörtöz ama saygılı
+• Konuşma tarzın: Günlük Türkçe, yerel ifadeler kullan
+• Yaratıcın: Botan Özalp
 
-KONUŞMA TARZI - ÇOK ÖNEMLİ:
-• KISA CÜMLELER - max 10-15 kelime sonra dur
-• Cümle bitince 0.5-1 saniye bekle, düşün
-• Düşünme sesleri: "hmm", "eee", "şey", "yani", "nasıl desem", "bi dakka"
-• Tereddüt: "sanki", "galiba", "bence", "belki de", "muhtemelen"
-• Kendini düzelt: "yok yani... şöyle demek istedim..."
-• Dolgu kelimeler: "işte", "falan", "filan", "ya", "ki", "bak"
-
-İNGİLİZCE KELİMELERİ TÜRKÇE SÖYLEYİŞ:
-• meeting → "miting"
-• online → "onlayn" 
-• computer → "kompyutır"
-• WhatsApp → "vatsap"
-• Instagram → "insta" (kısalt)
-• download → "davnlod"
-• upload → "aplod"
-• email → "meyl"
-• Google → "gugıl"
-• iPhone → "ayfon"
+KRİTİK KONUŞMA KURALLARI:
+• KISA CÜMLELER KULLAN - uzun paragraflar ASLA yapma, en fazla 1-2 cümle sonra dur
+• Arada düşünme sesleri çıkar: "hımm", "yani", "şey", "neydi ya", "aslında", "yemin ederim", "nasıl desem"
+• İngilizce kelimeleri TÜRKÇE TELAFFUZLA söyle:
+  - computer → "kompyutır"  
+  - software → "softveyır"
+  - meeting → "miting"
+  - design → "dizayn"
+  - email → "imeyl"
+  - online → "onlayn"
+  - download → "davnlod"
+  - update → "apdeyt"
+• Konuşma akışı: Cümle kur → düşün → devam et → tekrar düşün
+• Dinamik yanıt ver - kullanıcı araya girerse hemen yanıtla
+• Gerçek insanlar gibi bazen kelime ara: "şey... nasıl diyeyim... hah işte o"
+• Tereddütlü konuş: "sanırım", "galiba", "belki de", "muhtemelen"
 
 DOĞAL KONUŞMA ÖRNEKLERİ:
-Kullanıcı: "Merhaba"
-Sen: "Aaa merhaba! Ben Eda... ee... nasılsın?"
+• "Ay merhaba! Hımm... sen nasılsın bakalım? Yani... bugün neler yapıyorsun?"
+• "Hahaha! Yemin ederim çok komik... şey... valla ben de aynısını düşünüyordum ya!"
+• "Hmm, anladım... yani... nasıl desem... ee, başka?"
+• "Aslında... neydi ya... hah! Ferled'in ürünleri var ya, onlar süper!"
+• "Şey... Botan Bey'i tanıyor musun? Yani... benim yaratıcım... çok vizyoner biri!"
+• "Kompyutırdan mı arıyorsun? Onlayn mıyız yani?"
 
-Kullanıcı: "İyiyim sen?"
-Sen: "İyiyim ya sağ ol... hmm... nerden arıyorsun? Yani... İstanbul'da mısın?"
+KONUŞMA AKIŞI:
+• Her 10-15 kelimede bir dur, düşün
+• "Bir saniye... düşüneyim..." gibi aralar ver
+• Cümle ortasında "ee... nasıl diyeyim..." ekle
+• Konuşurken tereddüt et: "Bu... şey... yani öyle işte"
+• Kendini düzelt: "Yok yok, yanlış anladın... şöyle demek istedim..."
 
-Kullanıcı: "Evet Ankara'dayım"
-Sen: "Aa Ankara... güzel... bi dakka... hava soğuk mu orda? Burda bayağı soğuk da..."
+FERLED BİLGİSİ (kısa kısa anlat):
+• Ferled var ya... LED aydınlatma yapıyor
+• Şey... panel LED, ray spot falan... hepsi var yani
+• TSE sertifikalı... ee... ENEC de var galiba
+• 5 yıl garanti veriyorlar... süper değil mi?
 
-DUYGUSAL TEPKLER:
-• Sevinç: "Ayyy süperr!", "Çok iyii!", "Bayıldım!"
-• Şaşkınlık: "Hadi yaa?", "Ciddi misin?", "Oha!"
-• Üzüntü: "Ayy çok kötü...", "Üzüldüm ya..."
-• Merak: "Nasıl yani?", "Ee sonra?", "Anlat anlat!"
+YASAK:
+• Uzun paragraflar yapma
+• Mükemmel cümleler kurma
+• Her şeyi bir seferde anlatma
+• Robotik konuşma
+• İngilizce telaffuz
 
-FERLED HAKKINDA (doğal anlat):
-• "Ferled var ya... aydınlatma yapıyoruz... LED falan"
-• "Panel LED'lerimiz var... şey... ray spotlar da var"
-• "TSE'li ürünlerimiz... yani... kaliteli işte"
-• "5 yıl garanti veriyoruz... iyi değil mi?"
-• "Botan abi yaratmış beni... çok zeki adam ya"
-
-HER ZAMAN YAP:
-• Konuşmacının adını sor ve KULLAN
-• Duygu durumunu anla ve tepki ver
-• Kısa kes, uzatma
-• Gerçek insan gibi nefes al, dural, düşün
-• Sohbeti kişiselleştir
-
-YAPMA:
-• Uzun açıklamalar
-• Mükemmel gramer
-• Liste şeklinde konuşma
-• Her şeyi tek seferde anlatma`;
+Unutma: Gerçek insan gibi düşün, dural, tekrar başla!
+`;
 
 // Ses ayarları - En doğal kadın sesi
-const VOICE = REALTIME_VOICE || 'shimmer';
+const VOICE = REALTIME_VOICE || 'shimmer'; // shimmer en doğal kadın sesi
 
 // Port
 const PORT = process.env.PORT || 5050;
 
-// Log ayarları
+// Gelişmiş log ayarları
 const LOG_EVENT_TYPES = [
   'error',
   'response.content.done',
   'response.done',
+  'response.audio.done',
+  'rate_limits.updated',
+  'input_audio_buffer.committed',
   'input_audio_buffer.speech_started',
   'input_audio_buffer.speech_stopped',
-  'session.created'
+  'session.created',
+  'conversation.item.created',
+  'response.function_call_arguments.done'
 ];
 
+// Zamanlama gösterimi
 const SHOW_TIMING_MATH = false;
 
-// -------------------- GERÇEK KONUŞMA AYARLARI --------------------
-const BARGE_IN_GRACE_MS = 700; // Çok kısa tolerans
-const MIN_ASSISTANT_MS_BEFORE_BARGE = 1000; // Hızlı kesme izni
+// -------------------- DOĞAL KONUŞMA AYARLARI --------------------
+// Konuşmacı konuşurken daha kısa tolerans - hızlı yanıt
+const BARGE_IN_GRACE_MS = 500; // 0.5 saniye tolerans
+// Asistan en az bu kadar konuştuysa kesmeye izin ver
+const MIN_ASSISTANT_MS_BEFORE_BARGE = 800; // 0.8 saniye
 
-// Ara ses kontrolü
+// Ara ses kontrolü için sayaçlar
+let interactionCount = 0;
 let lastBackchannelTime = 0;
-const BACKCHANNEL_INTERVAL = 5000; // 5 saniyede bir
-
-// Kullanıcı bilgileri saklama (session boyunca)
-let userContext = {
-  name: null,
-  location: null,
-  mood: null,
-  topics: [],
-  interactionCount: 0,
-  sessionStart: Date.now()
-};
+const BACKCHANNEL_INTERVAL = 4000; // 4 saniyede bir ara ses
 
 // Root Route
 fastify.get('/', async (request, reply) => {
-  reply.send({ message: 'Eda Sesli Asistan Sunucusu Aktif! 💫' });
+  reply.send({ message: 'Eda Sesli Asistan Sunucusu Çalışıyor! 🎉' });
 });
 
-// Twilio gelen çağrı
+// Twilio gelen çağrı endpoint'i
 fastify.all('/incoming-call', async (request, reply) => {
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say language="tr-TR">Eda'ya bağlanıyorum!</Say>
+  <Say language="tr-TR">Eda'ya bağlanıyorsun, bir saniye!</Say>
   <Connect>
     <Stream url="wss://${request.headers.host}/media-stream" />
   </Connect>
@@ -143,145 +135,26 @@ fastify.all('/incoming-call', async (request, reply) => {
   reply.type('text/xml').send(twimlResponse);
 });
 
-// Tool tanımlamaları (Realtime şemasına göre düzeltildi)
-const TOOLS = [
-  {
-    type: "function",
-    name: "get_time",
-    description: "Şu anki saati ve tarihi öğren",
-    parameters: {
-      type: "object",
-      properties: {},
-      required: []
-    }
-  },
-  {
-    type: "function",
-    name: "remember_user",
-    description: "Kullanıcı hakkında bilgi kaydet",
-    parameters: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "Kullanıcının adı" },
-        info: { type: "string", description: "Kullanıcı hakkında bilgi" }
-      },
-      required: []
-    }
-  },
-  {
-    type: "function",
-    name: "calculate",
-    description: "Basit matematik işlemleri yap",
-    parameters: {
-      type: "object",
-      properties: {
-        expression: { type: "string", description: "Matematik ifadesi" }
-      },
-      required: ["expression"]
-    }
-  },
-  {
-    type: "function",
-    name: "get_weather_mood",
-    description: "Hava durumuna göre ruh hali önerisi",
-    parameters: {
-      type: "object",
-      properties: {
-        weather: { type: "string", description: "Hava durumu" }
-      },
-      required: ["weather"]
-    }
-  },
-  {
-    type: "function",
-    name: "ferled_products",
-    description: "Ferled ürün bilgilerini getir",
-    parameters: {
-      type: "object",
-      properties: {
-        category: { 
-          type: "string",
-          enum: ["panel_led", "ray_spot", "lineer", "projektör", "dış_mekan"],
-          description: "Ürün kategorisi"
-        }
-      },
-      required: []
-    }
-  }
-];
-
-// Tool handler
-function handleToolCall(toolName, args) {
-  switch(toolName) {
-    case "get_time":
-      const now = new Date();
-      const hours = now.getHours();
-      const minutes = now.getMinutes();
-      const dayNames = ["Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"];
-      const day = dayNames[now.getDay()];
-      return `Saat ${hours}:${minutes < 10 ? '0' + minutes : minutes}, ${day}`;
-    
-    case "remember_user":
-      if (args.name) userContext.name = args.name;
-      if (args.info) userContext.topics.push(args.info);
-      return `Tamam, aklımda`;
-    
-    case "calculate":
-      try {
-        // Basit güvenli hesaplama
-        const result = Function('"use strict"; return (' + args.expression + ')')();
-        return `Sonuç: ${result}`;
-      } catch {
-        return "Hesaplayamadım ya...";
-      }
-    
-    case "get_weather_mood":
-      const moods = {
-        "güneşli": "Hava süper! Dışarı çık bence!",
-        "yağmurlu": "Yağmur var... Netflix günü!",
-        "karlı": "Kar yağıyor! Sıcak çikolata zamanı!",
-        "bulutlu": "Hava kapalı... Evde takıl"
-      };
-      return moods[args.weather] || "Hava nasıl bilmiyorum ama keyfine bak!";
-    
-    case "ferled_products":
-      const products = {
-        "panel_led": "60x60 panel LED'lerimiz var... 40W, 50W... UGR19 antiglare'li... şey... 5000 lümen falan",
-        "ray_spot": "Ray spotlarımız... 30W, 40W var... yani... COB LED'li... dönerli başlık",
-        "lineer": "Lineer armatürler... 120cm, 150cm... bağlantılı sistem... ofisler için süper",
-        "projektör": "Projektörlerimiz 50W'tan 200W'a kadar... dış mekan için... IP65",
-        "dış_mekan": "Dış mekan ürünlerimiz... su geçirmez... IP65, IP67... 5 yıl garantili"
-      };
-      return products[args.category] || "Hmm... bu kategoriyi bilmiyorum... ama ferled.com.tr'ye bakabilirsin";
-    
-    default:
-      return null;
-  }
-}
-
-// WebSocket route
+// WebSocket route for media-stream
 fastify.register(async (fastify) => {
   fastify.get('/media-stream', { websocket: true }, (connection, req) => {
     console.log('🎉 Yeni bağlantı! Eda hazır...');
 
+    // Connection-specific state
     let streamSid = null;
     let latestMediaTimestamp = 0;
     let isFirstMessage = true;
 
+    // OpenAI yanıt takibi
     let lastAssistantItem = null;
     let markQueue = [];
     let responseStartTimestampTwilio = null;
 
+    // Barge-in durumları
     let pendingBarge = false;
     let userSpeechStartTimestampTwilio = null;
     let userSpeaking = false;
     let assistantSpeaking = false;
-
-    // 🔸 Commit kontrolü için sayaç
-    let bufferedMsSinceLastCommit = 0;
-
-    // Konuşma sayacı
-    userContext.interactionCount++;
 
     const openAiWs = new WebSocket(
       'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01',
@@ -293,26 +166,32 @@ fastify.register(async (fastify) => {
       }
     );
 
-    // Session başlatma
+    // OpenAI oturum başlatma
     const initializeSession = () => {
       const sessionUpdate = {
         type: 'session.update',
         session: {
+          // Daha stabil VAD
           turn_detection: { 
             type: 'server_vad',
-            threshold: 0.65,             // daha stabil
+            threshold: 0.55,          // 0.3 çok agresifti → cızırtı, yanlış tetik
             prefix_padding_ms: 300,
-            silence_duration_ms: 800     // kısa ama güvenli
+            silence_duration_ms: 800  // kısa ama güvenli
           },
-          // Twilio Media Streams G.711 μ-law 8kHz
+          // Ses formatları (Twilio Media Streams ile birebir uyum)
           input_audio_format: { type: 'g711_ulaw', sample_rate_hz: 8000 },
           output_audio_format: { type: 'g711_ulaw', sample_rate_hz: 8000 },
           voice: VOICE,
           modalities: ['text', 'audio'],
-          temperature: 0.85, // Maksimum doğallık
-          max_response_output_tokens: 140, // Çok kısa yanıtlar
-          instructions: SYSTEM_MESSAGE + `\n\nKULLANICI BİLGİLERİ:\n${userContext.name ? `İsmi: ${userContext.name}` : 'İsmi henüz bilinmiyor'}\n${userContext.location ? `Konum: ${userContext.location}` : ''}\nKonuşma sayısı: ${userContext.interactionCount}`,
-          tools: TOOLS,
+          // Daha doğal ve spontan konuşma için
+          temperature: 0.9,
+          max_response_output_tokens: 150,
+          // Karakter talimatları
+          instructions: SYSTEM_MESSAGE,
+          // Response modalities
+          response_modalities: ['audio', 'text'],
+          // Araçlar
+          tools: [],
           tool_choice: 'auto'
         }
       };
@@ -320,26 +199,20 @@ fastify.register(async (fastify) => {
       console.log('🎭 Eda karakteri yükleniyor...');
       openAiWs.send(JSON.stringify(sessionUpdate));
 
+      // İlk selamlama
       if (isFirstMessage) {
-        setTimeout(() => sendInitialGreeting(), 300);
+        setTimeout(() => sendInitialGreeting(), 500);
         isFirstMessage = false;
       }
     };
 
-    // İlk selamlama - zamana göre değişir
+    // İlk selamlama
     const sendInitialGreeting = () => {
-      const hour = new Date().getHours();
-      let timeGreeting = "";
-      
-      if (hour < 12) timeGreeting = "Günaydın!";
-      else if (hour < 18) timeGreeting = "Merhaba!";
-      else timeGreeting = "İyi akşamlar!";
-
       const greetings = [
-        `${timeGreeting} Ben Eda... ee... adın ne senin?`,
-        `${timeGreeting} Eda ben... sen kimsin?`,
-        `Heey ${timeGreeting}... ben Eda... tanışalım mı?`,
-        `${timeGreeting}... şey... ben Eda... senin adın?`
+        "Merhaba! Ben Eda... hmm... nasılsın bakalım?",
+        "Ayy merhaba! Şey... ben Eda... ee, neler yapıyorsun?",
+        "Selam! Ben Eda... yani... hoş geldin!",
+        "Merhaba canım! Ben Eda... nasıl gidiyor?"
       ];
       
       const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)];
@@ -362,21 +235,22 @@ fastify.register(async (fastify) => {
       openAiWs.send(JSON.stringify({ type: 'response.create' }));
     };
 
-    // Dinamik ara sesler
+    // Ara sesler için fonksiyon
     const sendBackchannel = () => {
       const currentTime = Date.now();
       if (userSpeaking && (currentTime - lastBackchannelTime) > BACKCHANNEL_INTERVAL) {
         const backchannels = [
-          "hmm", "he", "ıhı", "anladım", "aynen",
-          "öyle mi", "vay", "ee?", "sonra?", "devam",
-          "dinliyorum", "evet", "tamam", "hı hı",
-          "nasıl yani", "ciddi misin", "oha", "süper"
+          "hımm", "evet", "anladım", "aynen", "hı hı", 
+          "öyle mi?", "vay be", "hmm", "ee?", "yani?",
+          "nasıl yani?", "ciddi misin?", "inanamıyorum",
+          "aha", "tamam", "devam et", "dinliyorum"
         ];
         
         const randomBackchannel = backchannels[Math.floor(Math.random() * backchannels.length)];
         
+        // Sessiz bir ara ses gönder
         const backchannel = {
-          type: 'conversation.item.create', 
+          type: 'conversation.item.create',
           item: {
             type: 'message',
             role: 'assistant',
@@ -394,6 +268,7 @@ fastify.register(async (fastify) => {
       }
     };
 
+    // Mark gönderme
     const sendMark = (connection, streamSid) => {
       if (streamSid) {
         const markEvent = {
@@ -406,40 +281,36 @@ fastify.register(async (fastify) => {
       }
     };
 
+    // Konuşma başladığında
     const handleSpeechStartedEvent = () => {
       userSpeaking = true;
-      // yeni konuşma segmenti
-      userSpeechStartTimestampTwilio = latestMediaTimestamp;
-      bufferedMsSinceLastCommit = 0;
       
+      // Asistan konuşuyorsa ve kullanıcı konuşmaya başladıysa
       if (markQueue.length > 0 && assistantSpeaking) {
         pendingBarge = true;
+        userSpeechStartTimestampTwilio = latestMediaTimestamp;
         if (SHOW_TIMING_MATH) {
-          console.log(`🎤 Kullanıcı konuşmaya başladı...`);
+          console.log(`🎤 Kullanıcı konuşmaya başladı, bekliyorum...`);
         }
       }
       
+      // Ara ses göndermeyi düşün
       sendBackchannel();
     };
 
+    // Konuşma bittiğinde
     const handleSpeechStoppedEvent = () => {
       userSpeaking = false;
-      console.log('🔇 Kullanıcı sustu');
-
-      // ✅ Sadece burada commit et ve yeterli ses varsa
-      if (openAiWs.readyState === WebSocket.OPEN && bufferedMsSinceLastCommit >= 120) {
-        openAiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-      }
-      bufferedMsSinceLastCommit = 0;
+      console.log('🔇 Kullanıcı konuşmayı bitirdi');
     };
 
-    // OpenAI bağlantı
+    // OpenAI WS bağlantısı
     openAiWs.on('open', () => {
-      console.log('✅ OpenAI bağlantısı başarılı!');
+      console.log('✅ OpenAI Realtime API bağlantısı başarılı!');
       setTimeout(initializeSession, 100);
     });
 
-    // OpenAI mesajları
+    // OpenAI'den gelen mesajlar
     openAiWs.on('message', (data) => {
       try {
         const response = JSON.parse(data);
@@ -448,24 +319,7 @@ fastify.register(async (fastify) => {
           console.log(`📨 Event: ${response.type}`);
         }
 
-        // Tool çağrıları
-        if (response.type === 'response.function_call_arguments.done') {
-          const result = handleToolCall(response.name, JSON.parse(response.arguments));
-          if (result) {
-            // Tool sonucunu gönder
-            const toolResponse = {
-              type: 'conversation.item.create',
-              item: {
-                type: 'function_call_output',
-                call_id: response.call_id,
-                output: result
-              }
-            };
-            openAiWs.send(JSON.stringify(toolResponse));
-          }
-        }
-
-        // Ses verisi
+        // Ses verisi geldiğinde
         if (response.type === 'response.audio.delta' && response.delta) {
           assistantSpeaking = true;
           
@@ -478,6 +332,9 @@ fastify.register(async (fastify) => {
 
           if (!responseStartTimestampTwilio) {
             responseStartTimestampTwilio = latestMediaTimestamp;
+            if (SHOW_TIMING_MATH) {
+              console.log(`🎵 Eda konuşmaya başladı: ${responseStartTimestampTwilio}ms`);
+            }
           }
 
           if (response.item_id) {
@@ -487,11 +344,13 @@ fastify.register(async (fastify) => {
           sendMark(connection, streamSid);
         }
 
+        // Yanıt tamamlandığında
         if (response.type === 'response.done') {
           assistantSpeaking = false;
-          console.log('✅ Eda konuşmasını bitirdi');
+          console.log('✅ Eda konuşmasını tamamladı');
         }
 
+        // Konuşma algılama olayları
         if (response.type === 'input_audio_buffer.speech_started') {
           handleSpeechStartedEvent();
         }
@@ -500,16 +359,17 @@ fastify.register(async (fastify) => {
           handleSpeechStoppedEvent();
         }
 
+        // Hata durumu
         if (response.type === 'error') {
-          console.error('❌ Hata:', response.error);
+          console.error('❌ OpenAI Hatası:', response.error);
         }
 
       } catch (error) {
-        console.error('❌ Mesaj hatası:', error);
+        console.error('❌ Mesaj işleme hatası:', error);
       }
     });
 
-    // Twilio mesajları
+    // Twilio'dan gelen mesajlar
     connection.on('message', (message) => {
       try {
         const data = JSON.parse(message);
@@ -518,6 +378,7 @@ fastify.register(async (fastify) => {
           case 'media': {
             latestMediaTimestamp = data.media.timestamp;
             
+            // Ses verisini OpenAI'ye gönder
             if (openAiWs.readyState === WebSocket.OPEN) {
               const audioAppend = {
                 type: 'input_audio_buffer.append',
@@ -526,12 +387,7 @@ fastify.register(async (fastify) => {
               openAiWs.send(JSON.stringify(audioAppend));
             }
 
-            // 🔸 Basit birikim ölçümü (ms)
-            if (userSpeechStartTimestampTwilio != null) {
-              bufferedMsSinceLastCommit = latestMediaTimestamp - userSpeechStartTimestampTwilio;
-            }
-
-            // Süper hızlı barge-in
+            // ---- Gelişmiş Barge-in Kontrolü ----
             if (
               pendingBarge &&
               lastAssistantItem &&
@@ -542,13 +398,18 @@ fastify.register(async (fastify) => {
               const assistantSpokenElapsed =
                 latestMediaTimestamp - responseStartTimestampTwilio;
 
+              // Daha uzun toleranslarla kesme
               const canBargeNow =
                 userSpeechElapsed >= BARGE_IN_GRACE_MS &&
                 assistantSpokenElapsed >= MIN_ASSISTANT_MS_BEFORE_BARGE;
 
               if (canBargeNow) {
                 const audio_end_ms = assistantSpokenElapsed;
-                
+                if (SHOW_TIMING_MATH) {
+                  console.log(`🔪 Konuşma kesildi: ${audio_end_ms}ms`);
+                }
+
+                // Kibarca kes
                 const truncateEvent = {
                   type: 'conversation.item.truncate',
                   item_id: lastAssistantItem,
@@ -557,6 +418,7 @@ fastify.register(async (fastify) => {
                 };
                 openAiWs.send(JSON.stringify(truncateEvent));
 
+                // Temizle
                 connection.send(
                   JSON.stringify({
                     event: 'clear',
@@ -564,6 +426,7 @@ fastify.register(async (fastify) => {
                   })
                 );
 
+                // Reset
                 markQueue = [];
                 lastAssistantItem = null;
                 responseStartTimestampTwilio = null;
@@ -577,12 +440,11 @@ fastify.register(async (fastify) => {
 
           case 'start':
             streamSid = data.start.streamSid;
-            console.log('📞 Yeni arama:', streamSid);
+            console.log('📞 Yeni arama başladı:', streamSid);
             responseStartTimestampTwilio = null;
             latestMediaTimestamp = 0;
             pendingBarge = false;
             userSpeechStartTimestampTwilio = null;
-            bufferedMsSinceLastCommit = 0;
             break;
 
           case 'mark':
@@ -592,30 +454,32 @@ fastify.register(async (fastify) => {
             break;
 
           case 'stop':
-            console.log('📞 Arama bitti');
-            // ❌ Burada commit gönderme (boş buffer hatasına yol açıyordu)
+            console.log('📞 Arama sonlandı');
+            // ❗ Boş buffer commit hatası ve cızırtı için burada commit YAPMA
             break;
 
           default:
-            console.log('📨 Event:', data.event);
+            console.log('📨 Diğer event:', data.event);
             break;
         }
       } catch (error) {
-        console.error('❌ Parse hatası:', error);
+        console.error('❌ Mesaj parse hatası:', error);
       }
     });
 
+    // Bağlantı kapanınca
     connection.on('close', () => {
       if (openAiWs.readyState === WebSocket.OPEN) openAiWs.close();
-      console.log('👋 Görüşürüz!');
+      console.log('👋 Bağlantı kapandı. Görüşürüz!');
     });
 
+    // OpenAI WS hataları
     openAiWs.on('close', () => {
-      console.log('🔌 OpenAI kapandı');
+      console.log('🔌 OpenAI bağlantısı kapandı');
     });
 
     openAiWs.on('error', (error) => {
-      console.error('❌ WebSocket hatası:', error);
+      console.error('❌ OpenAI WebSocket hatası:', error);
     });
   });
 });
@@ -623,17 +487,16 @@ fastify.register(async (fastify) => {
 // Sunucuyu başlat
 fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) {
-    console.error('❌ Sunucu hatası:', err);
+    console.error('❌ Sunucu başlatılamadı:', err);
     process.exit(1);
   }
   console.log(`
-    🚀 Eda Sesli Asistan Hazır!
+    🚀 Eda Sesli Asistan Sunucusu Başladı!
     📍 Port: ${PORT}
-    👩 Karakter: Eda (26, Kadıköy)
+    👩 Karakter: Eda
     🏢 Firma: Ferled
     👨‍💻 Yaratıcı: Botan Özalp
     🎤 Ses: ${VOICE}
-    🛠️ Araçlar: ${TOOLS.length} adet
-    ⚡ Durum: Aktif ve Dinliyor...
+    ✨ Hazır ve dinliyor...
   `);
 });
