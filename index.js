@@ -143,79 +143,69 @@ fastify.all('/incoming-call', async (request, reply) => {
   reply.type('text/xml').send(twimlResponse);
 });
 
-// Tool tanımlamaları
+// Tool tanımlamaları (Realtime şemasına göre düzeltildi)
 const TOOLS = [
   {
     type: "function",
-    function: {
-      name: "get_time",
-      description: "Şu anki saati ve tarihi öğren",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: []
-      }
-    }
-  },
-  {
-    type: "function", 
-    function: {
-      name: "remember_user",
-      description: "Kullanıcı hakkında bilgi kaydet",
-      parameters: {
-        type: "object",
-        properties: {
-          name: { type: "string", description: "Kullanıcının adı" },
-          info: { type: "string", description: "Kullanıcı hakkında bilgi" }
-        },
-        required: []
-      }
+    name: "get_time",
+    description: "Şu anki saati ve tarihi öğren",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: []
     }
   },
   {
     type: "function",
-    function: {
-      name: "calculate",
-      description: "Basit matematik işlemleri yap",
-      parameters: {
-        type: "object",
-        properties: {
-          expression: { type: "string", description: "Matematik ifadesi" }
-        },
-        required: ["expression"]
-      }
+    name: "remember_user",
+    description: "Kullanıcı hakkında bilgi kaydet",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Kullanıcının adı" },
+        info: { type: "string", description: "Kullanıcı hakkında bilgi" }
+      },
+      required: []
     }
   },
   {
     type: "function",
-    function: {
-      name: "get_weather_mood",
-      description: "Hava durumuna göre ruh hali önerisi",
-      parameters: {
-        type: "object",
-        properties: {
-          weather: { type: "string", description: "Hava durumu" }
-        },
-        required: ["weather"]
-      }
+    name: "calculate",
+    description: "Basit matematik işlemleri yap",
+    parameters: {
+      type: "object",
+      properties: {
+        expression: { type: "string", description: "Matematik ifadesi" }
+      },
+      required: ["expression"]
     }
   },
   {
     type: "function",
-    function: {
-      name: "ferled_products",
-      description: "Ferled ürün bilgilerini getir",
-      parameters: {
-        type: "object",
-        properties: {
-          category: { 
-            type: "string",
-            enum: ["panel_led", "ray_spot", "lineer", "projektör", "dış_mekan"],
-            description: "Ürün kategorisi"
-          }
-        },
-        required: []
-      }
+    name: "get_weather_mood",
+    description: "Hava durumuna göre ruh hali önerisi",
+    parameters: {
+      type: "object",
+      properties: {
+        weather: { type: "string", description: "Hava durumu" }
+      },
+      required: ["weather"]
+    }
+  },
+  {
+    type: "function",
+    name: "ferled_products",
+    description: "Ferled ürün bilgilerini getir",
+    parameters: {
+      type: "object",
+      properties: {
+        category: { 
+          type: "string",
+          enum: ["panel_led", "ray_spot", "lineer", "projektör", "dış_mekan"],
+          description: "Ürün kategorisi"
+        }
+      },
+      required: []
     }
   }
 ];
@@ -287,6 +277,9 @@ fastify.register(async (fastify) => {
     let userSpeaking = false;
     let assistantSpeaking = false;
 
+    // 🔸 Commit kontrolü için sayaç
+    let bufferedMsSinceLastCommit = 0;
+
     // Konuşma sayacı
     userContext.interactionCount++;
 
@@ -307,12 +300,13 @@ fastify.register(async (fastify) => {
         session: {
           turn_detection: { 
             type: 'server_vad',
-            threshold: 0.5, // Çok hassas
+            threshold: 0.65,             // daha stabil
             prefix_padding_ms: 300,
-            silence_duration_ms: 500 // Çok kısa sessizlik
+            silence_duration_ms: 800     // kısa ama güvenli
           },
-          input_audio_format: 'g711_ulaw',
-          output_audio_format: 'g711_ulaw',
+          // Twilio Media Streams G.711 μ-law 8kHz
+          input_audio_format: { type: 'g711_ulaw', sample_rate_hz: 8000 },
+          output_audio_format: { type: 'g711_ulaw', sample_rate_hz: 8000 },
           voice: VOICE,
           modalities: ['text', 'audio'],
           temperature: 0.85, // Maksimum doğallık
@@ -414,10 +408,12 @@ fastify.register(async (fastify) => {
 
     const handleSpeechStartedEvent = () => {
       userSpeaking = true;
+      // yeni konuşma segmenti
+      userSpeechStartTimestampTwilio = latestMediaTimestamp;
+      bufferedMsSinceLastCommit = 0;
       
       if (markQueue.length > 0 && assistantSpeaking) {
         pendingBarge = true;
-        userSpeechStartTimestampTwilio = latestMediaTimestamp;
         if (SHOW_TIMING_MATH) {
           console.log(`🎤 Kullanıcı konuşmaya başladı...`);
         }
@@ -429,6 +425,12 @@ fastify.register(async (fastify) => {
     const handleSpeechStoppedEvent = () => {
       userSpeaking = false;
       console.log('🔇 Kullanıcı sustu');
+
+      // ✅ Sadece burada commit et ve yeterli ses varsa
+      if (openAiWs.readyState === WebSocket.OPEN && bufferedMsSinceLastCommit >= 120) {
+        openAiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+      }
+      bufferedMsSinceLastCommit = 0;
     };
 
     // OpenAI bağlantı
@@ -524,6 +526,11 @@ fastify.register(async (fastify) => {
               openAiWs.send(JSON.stringify(audioAppend));
             }
 
+            // 🔸 Basit birikim ölçümü (ms)
+            if (userSpeechStartTimestampTwilio != null) {
+              bufferedMsSinceLastCommit = latestMediaTimestamp - userSpeechStartTimestampTwilio;
+            }
+
             // Süper hızlı barge-in
             if (
               pendingBarge &&
@@ -575,6 +582,7 @@ fastify.register(async (fastify) => {
             latestMediaTimestamp = 0;
             pendingBarge = false;
             userSpeechStartTimestampTwilio = null;
+            bufferedMsSinceLastCommit = 0;
             break;
 
           case 'mark':
@@ -585,9 +593,7 @@ fastify.register(async (fastify) => {
 
           case 'stop':
             console.log('📞 Arama bitti');
-            if (openAiWs.readyState === WebSocket.OPEN) {
-              openAiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-            }
+            // ❌ Burada commit gönderme (boş buffer hatasına yol açıyordu)
             break;
 
           default:
