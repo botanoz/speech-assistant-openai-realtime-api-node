@@ -107,15 +107,42 @@ const LOG_EVENT_TYPES = [
 const SHOW_TIMING_MATH = false;
 
 // -------------------- DOĞAL KONUŞMA AYARLARI --------------------
-// Konuşmacı konuşurken daha kısa tolerans - hızlı yanıt
 const BARGE_IN_GRACE_MS = 500; // 0.5 saniye tolerans
-// Asistan en az bu kadar konuştuysa kesmeye izin ver
 const MIN_ASSISTANT_MS_BEFORE_BARGE = 800; // 0.8 saniye
 
-// Ara ses kontrolü için sayaçlar
 let interactionCount = 0;
 let lastBackchannelTime = 0;
 const BACKCHANNEL_INTERVAL = 4000; // 4 saniyede bir ara ses
+
+// 🔸 PCM16 -> μ-law dönüştürücü (Twilio PCMU ister)
+function linearToMuLaw(sample) {
+  // sample: signed 16-bit (Number)
+  const MULAW_MAX = 0x1FFF;
+  const BIAS = 0x84;
+  let sign = (sample >> 8) & 0x80;
+  if (sign !== 0) sample = -sample;
+  if (sample > 32635) sample = 32635; // clamp
+
+  sample = sample + BIAS;
+  let exponent = 7;
+  for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1) {
+    exponent--;
+  }
+  const mantissa = (sample >> ((exponent === 0) ? 4 : (exponent + 3))) & 0x0F;
+  const muLawByte = ~(sign | (exponent << 4) | mantissa) & 0xFF;
+  return muLawByte;
+}
+
+function pcm16ToMuLaw(pcm16BufferLE) {
+  // 16-bit little-endian mono PCM
+  const samples = pcm16BufferLE.length / 2;
+  const ulaw = Buffer.alloc(samples);
+  for (let i = 0; i < samples; i++) {
+    const s = pcm16BufferLE.readInt16LE(i * 2);
+    ulaw[i] = linearToMuLaw(s);
+  }
+  return ulaw;
+}
 
 // Root Route
 fastify.get('/', async (request, reply) => {
@@ -174,23 +201,20 @@ fastify.register(async (fastify) => {
           // Daha stabil VAD
           turn_detection: { 
             type: 'server_vad',
-            threshold: 0.55,          // 0.3 çok agresifti → cızırtı, yanlış tetik
+            threshold: 0.55,
             prefix_padding_ms: 300,
-            silence_duration_ms: 800  // kısa ama güvenli
+            silence_duration_ms: 800
           },
-          // Ses formatları (Twilio Media Streams ile birebir uyum)
+          // GİRİŞ: Twilio -> PCMU 8kHz (dokunmuyoruz)
           input_audio_format: { type: 'g711_ulaw', sample_rate_hz: 8000 },
-          output_audio_format: { type: 'g711_ulaw', sample_rate_hz: 8000 },
+          // ÇIKIŞ: OpenAI -> PCM16 8kHz (lokalde μ-law'a çevireceğiz)
+          output_audio_format: { type: 'pcm16', sample_rate_hz: 8000 },
           voice: VOICE,
           modalities: ['text', 'audio'],
-          // Daha doğal ve spontan konuşma için
           temperature: 0.9,
           max_response_output_tokens: 150,
-          // Karakter talimatları
           instructions: SYSTEM_MESSAGE,
-          // Response modalities
           response_modalities: ['audio', 'text'],
-          // Araçlar
           tools: [],
           tool_choice: 'auto'
         }
@@ -248,7 +272,6 @@ fastify.register(async (fastify) => {
         
         const randomBackchannel = backchannels[Math.floor(Math.random() * backchannels.length)];
         
-        // Sessiz bir ara ses gönder
         const backchannel = {
           type: 'conversation.item.create',
           item: {
@@ -284,8 +307,6 @@ fastify.register(async (fastify) => {
     // Konuşma başladığında
     const handleSpeechStartedEvent = () => {
       userSpeaking = true;
-      
-      // Asistan konuşuyorsa ve kullanıcı konuşmaya başladıysa
       if (markQueue.length > 0 && assistantSpeaking) {
         pendingBarge = true;
         userSpeechStartTimestampTwilio = latestMediaTimestamp;
@@ -293,8 +314,6 @@ fastify.register(async (fastify) => {
           console.log(`🎤 Kullanıcı konuşmaya başladı, bekliyorum...`);
         }
       }
-      
-      // Ara ses göndermeyi düşün
       sendBackchannel();
     };
 
@@ -322,11 +341,18 @@ fastify.register(async (fastify) => {
         // Ses verisi geldiğinde
         if (response.type === 'response.audio.delta' && response.delta) {
           assistantSpeaking = true;
+
+          // OpenAI -> PCM16 (base64) => Buffer
+          const pcm16Buf = Buffer.from(response.delta, 'base64');
+          // PCM16 -> μ-law
+          const ulawBuf = pcm16ToMuLaw(pcm16Buf);
+          // μ-law -> base64
+          const ulawB64 = ulawBuf.toString('base64');
           
           const audioDelta = {
             event: 'media',
             streamSid: streamSid,
-            media: { payload: response.delta }
+            media: { payload: ulawB64 }
           };
           connection.send(JSON.stringify(audioDelta));
 
@@ -350,7 +376,6 @@ fastify.register(async (fastify) => {
           console.log('✅ Eda konuşmasını tamamladı');
         }
 
-        // Konuşma algılama olayları
         if (response.type === 'input_audio_buffer.speech_started') {
           handleSpeechStartedEvent();
         }
@@ -359,7 +384,6 @@ fastify.register(async (fastify) => {
           handleSpeechStoppedEvent();
         }
 
-        // Hata durumu
         if (response.type === 'error') {
           console.error('❌ OpenAI Hatası:', response.error);
         }
@@ -378,7 +402,7 @@ fastify.register(async (fastify) => {
           case 'media': {
             latestMediaTimestamp = data.media.timestamp;
             
-            // Ses verisini OpenAI'ye gönder
+            // Twilio -> OpenAI (PCMU 8kHz) direkt ilet
             if (openAiWs.readyState === WebSocket.OPEN) {
               const audioAppend = {
                 type: 'input_audio_buffer.append',
@@ -398,7 +422,6 @@ fastify.register(async (fastify) => {
               const assistantSpokenElapsed =
                 latestMediaTimestamp - responseStartTimestampTwilio;
 
-              // Daha uzun toleranslarla kesme
               const canBargeNow =
                 userSpeechElapsed >= BARGE_IN_GRACE_MS &&
                 assistantSpokenElapsed >= MIN_ASSISTANT_MS_BEFORE_BARGE;
@@ -409,7 +432,6 @@ fastify.register(async (fastify) => {
                   console.log(`🔪 Konuşma kesildi: ${audio_end_ms}ms`);
                 }
 
-                // Kibarca kes
                 const truncateEvent = {
                   type: 'conversation.item.truncate',
                   item_id: lastAssistantItem,
@@ -418,7 +440,6 @@ fastify.register(async (fastify) => {
                 };
                 openAiWs.send(JSON.stringify(truncateEvent));
 
-                // Temizle
                 connection.send(
                   JSON.stringify({
                     event: 'clear',
@@ -426,7 +447,6 @@ fastify.register(async (fastify) => {
                   })
                 );
 
-                // Reset
                 markQueue = [];
                 lastAssistantItem = null;
                 responseStartTimestampTwilio = null;
@@ -455,7 +475,7 @@ fastify.register(async (fastify) => {
 
           case 'stop':
             console.log('📞 Arama sonlandı');
-            // ❗ Boş buffer commit hatası ve cızırtı için burada commit YAPMA
+            // Boş buffer commit burada yapılmıyor (cızırtı/hatayı tetikliyordu)
             break;
 
           default:
