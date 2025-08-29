@@ -142,7 +142,7 @@ fastify.get('/', async (request, reply) => {
     message: '🎉 Eda Sesli Asistan Çalışıyor!',
     status: 'active',
     voice: VOICE,
-    version: '3.0.0 - Sample Rate Fix'
+    version: '3.0.0 - Sample Rate Fix + BargeIn + DynamicLength'
   });
 });
 
@@ -177,9 +177,17 @@ fastify.register(async (fastify) => {
     let responseStartTimestamp = null;
     let isAssistantSpeaking = false;
     let isUserSpeaking = false;
-    
+
     // Interruption handling
     let audioChunkCount = 0;
+
+    // ==== NEW: Barge-in histerezisi & dinamik yanıt uzunluğu ====
+    let bargeInTimer = null;
+    let userSpeakingSince = null;
+    const BARGE_IN_MIN_MS = 240;   // kullanıcı sesi en az bu kadar sürerse kes
+    const BARGE_IN_GRACE_MS = 180; // kesmeden önce küçük bekleme
+    let nextMaxTokens = 100;       // varsayılan kısa cevap
+    let currentCallerNumber = 'Bilinmiyor';
     
     // OpenAI WebSocket connection
     const openAiWs = new WebSocket(
@@ -197,22 +205,26 @@ fastify.register(async (fastify) => {
       const sessionConfig = {
         type: 'session.update',
         session: {
-          // VAD ayarları
+          // VAD ayarları (daha doğal akış için biraz yumuşatıldı)
           turn_detection: {
             type: 'server_vad',
             threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 600
+            prefix_padding_ms: 400,
+            silence_duration_ms: 700
           },
           // KRİTİK: Audio format ayarları
           input_audio_format: 'g711_ulaw', // Twilio'dan gelen format
           output_audio_format: 'pcm16',    // OpenAI'den 24kHz PCM16 alacağız
+
+          // Türkçe transcription aç (dinamik cevap uzunluğu için)
+          input_audio_transcription: { model: 'whisper-1', language: 'tr' },
+
           // Diğer ayarlar
           voice: VOICE,
           instructions: SYSTEM_MESSAGE,
           modalities: ['text', 'audio'],
           temperature: 0.8,
-          max_response_output_tokens: 100
+          max_response_output_tokens: 100 // başlangıçta kısa
         }
       };
       
@@ -245,7 +257,7 @@ fastify.register(async (fastify) => {
         };
         
         openAiWs.send(JSON.stringify(initialMessage));
-        openAiWs.send(JSON.stringify({ type: 'response.create' }));
+        openAiWs.send(JSON.stringify({ type: 'response.create', response: { max_output_tokens: nextMaxTokens } }));
         console.log('👋 İlk karşılama gönderildi');
       }, 250);
     };
@@ -255,7 +267,7 @@ fastify.register(async (fastify) => {
       if (isAssistantSpeaking && lastAssistantItem) {
         console.log('🔪 Kullanıcı sözü kesti, temizleniyor...');
         
-        // Truncate OpenAI response
+        // Truncate OpenAI response (o ana dek çalınan kısmı koru)
         const truncateEvent = {
           type: 'conversation.item.truncate',
           item_id: lastAssistantItem,
@@ -263,6 +275,9 @@ fastify.register(async (fastify) => {
           audio_end_ms: audioChunkCount * 20 // Approximate timing
         };
         openAiWs.send(JSON.stringify(truncateEvent));
+
+        // Yanıtı tamamen iptal et (devam etmesin)
+        openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
         
         // Clear Twilio buffer
         if (streamSid) {
@@ -294,6 +309,25 @@ fastify.register(async (fastify) => {
         if (LOG_EVENT_TYPES.includes(response.type)) {
           if (response.type !== 'response.audio.delta') {
             console.log(`📨 OpenAI Event: ${response.type}`);
+          }
+        }
+
+        // ==== NEW: Transcript log + dinamik token karar ====
+        // Realtime API, transcription tamamlandığında benzer bir event yollar.
+        // Bazı sürümlerde 'input_audio_transcription.completed' ya da 
+        // 'conversation.item.audio_transcription.completed' olarak gelebilir.
+        if (
+          response.type === 'input_audio_transcription.completed' ||
+          response.type === 'conversation.item.audio_transcription.completed'
+        ) {
+          const text = (response.transcript || response.text || '').trim();
+          if (text) {
+            console.log(`🗣️ Arayan (${currentCallerNumber}) dedi ki: "${text}"`);
+
+            // Basit soru algılama → daha kısa ve hızlı yanıt
+            const t = text.toLowerCase();
+            const isQuestion = /(\?| mi\b| mı\b| mu\b| mü\b| neden\b| nasıl\b| kaç\b| ne zaman\b)/.test(t);
+            nextMaxTokens = isQuestion ? 45 : 100;
           }
         }
         
@@ -381,12 +415,36 @@ fastify.register(async (fastify) => {
           case 'input_audio_buffer.speech_started':
             isUserSpeaking = true;
             console.log('🎙️ Kullanıcı konuşmaya başladı');
-            handleUserInterruption();
+
+            // ==== NEW: Hemen kesme yerine küçük grace + min süre ====
+            if (isAssistantSpeaking) {
+              clearTimeout(bargeInTimer);
+              userSpeakingSince = Date.now();
+              bargeInTimer = setTimeout(() => {
+                const dur = Date.now() - (userSpeakingSince || Date.now());
+                if (dur >= BARGE_IN_MIN_MS) {
+                  handleUserInterruption();
+                }
+              }, BARGE_IN_GRACE_MS);
+            }
             break;
             
           case 'input_audio_buffer.speech_stopped':
             isUserSpeaking = false;
             console.log('🔇 Kullanıcı konuşmayı bitirdi');
+
+            // ==== NEW: Turu kapat + hızlı cevap üret ====
+            // Önce pending input'u commit et
+            openAiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+            // Sonra yeni yanıtı, seçilen token sınırıyla iste
+            openAiWs.send(JSON.stringify({
+              type: 'response.create',
+              response: { max_output_tokens: nextMaxTokens }
+            }));
+
+            // Temizlik
+            clearTimeout(bargeInTimer);
+            userSpeakingSince = null;
             break;
             
           case 'error':
@@ -415,10 +473,12 @@ fastify.register(async (fastify) => {
         switch (data.event) {
           case 'start':
             streamSid = data.start.streamSid;
+            // ==== NEW: numarayı logla ====
+            currentCallerNumber = data.start?.from || data.start?.customParameters?.from || 'Bilinmiyor';
             console.log('📞 Twilio stream başladı:', streamSid);
             console.log('📊 Arama detayları:', {
               callSid: data.start.callSid,
-              from: data.start.customParameters?.from || 'Bilinmiyor',
+              from: currentCallerNumber,
               to: data.start.customParameters?.to || 'Bilinmiyor'
             });
             break;
@@ -494,6 +554,8 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
 ║                                                              ║
 ║  🔧 Sample Rate Dönüşümü: 24kHz → 8kHz ✅                    ║
 ║  🔧 Format Dönüşümü: PCM16 → μ-law ✅                        ║
+║  🔧 Barge-in Histerezisi: 180ms + 240ms ✅                   ║
+║  🔧 Dinamik Yanıt Uzunluğu (TR ASR) ✅                       ║
 ║                                                              ║
 ║  ✅ Tüm sistemler hazır!                                     ║
 ║  📞 Aramalar bekleniyor...                                   ║
