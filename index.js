@@ -56,24 +56,53 @@ const VOICE = REALTIME_VOICE || 'shimmer';
 // Port ayarı
 const PORT = process.env.PORT || 5050;
 
-// Log ayarları - sadece önemli eventler
+// Log ayarları
 const LOG_EVENT_TYPES = [
   'error',
   'response.done',
   'response.audio.done',
+  'response.audio.delta',
   'input_audio_buffer.speech_started',
   'input_audio_buffer.speech_stopped',
-  'session.created'
+  'session.created',
+  'session.updated'
 ];
 
-// ==================== SES DÖNÜŞÜM FONKSİYONLARI ====================
+// Debug mode
+const DEBUG_AUDIO = process.env.DEBUG_AUDIO === 'true';
 
-// Basitleştirilmiş PCM16 -> μ-law dönüştürücü
-function pcm16ToUlaw(pcm16Buffer) {
+// ==================== KRİTİK: SAMPLE RATE DÖNÜŞÜMÜ ====================
+
+/**
+ * 24kHz PCM16 -> 8kHz PCM16 downsampling
+ * OpenAI 24kHz gönderir, Twilio 8kHz bekler
+ * Her 3 sample'dan 1'ini alıyoruz (basit downsampling)
+ */
+function downsample24to8(pcm16Buffer24khz) {
+  // 24kHz'den 8kHz'e dönüşüm (3:1 ratio)
+  const ratio = 3;
+  const samples24 = pcm16Buffer24khz.length / 2; // 16-bit = 2 byte per sample
+  const samples8 = Math.floor(samples24 / ratio);
+  const pcm16Buffer8khz = Buffer.alloc(samples8 * 2);
+  
+  for (let i = 0; i < samples8; i++) {
+    // Her 3 sample'dan birini al
+    const sample = pcm16Buffer24khz.readInt16LE(i * ratio * 2);
+    pcm16Buffer8khz.writeInt16LE(sample, i * 2);
+  }
+  
+  return pcm16Buffer8khz;
+}
+
+/**
+ * 8kHz PCM16 -> μ-law dönüştürücü
+ * Twilio için gerekli format
+ */
+function pcm16ToMulaw(pcm16Buffer) {
   const BIAS = 0x84;
   const CLIP = 32635;
   const samples = pcm16Buffer.length / 2;
-  const ulawData = Buffer.alloc(samples);
+  const mulawData = Buffer.alloc(samples);
   
   for (let i = 0; i < samples; i++) {
     let sample = pcm16Buffer.readInt16LE(i * 2);
@@ -85,12 +114,12 @@ function pcm16ToUlaw(pcm16Buffer) {
     // Clip
     if (sample > CLIP) sample = CLIP;
     
-    // Add bias  
+    // Add bias
     sample = sample + BIAS;
     
     // Find exponent
     let exponent = 7;
-    for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1) {
+    for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; mask >>= 1) {
       exponent--;
     }
     
@@ -98,11 +127,11 @@ function pcm16ToUlaw(pcm16Buffer) {
     const mantissa = (sample >> (exponent === 0 ? 4 : (exponent + 3))) & 0x0F;
     
     // Combine
-    const ulawByte = ~(sign | (exponent << 4) | mantissa) & 0xFF;
-    ulawData[i] = ulawByte;
+    const mulawByte = ~(sign | (exponent << 4) | mantissa) & 0xFF;
+    mulawData[i] = mulawByte;
   }
   
-  return ulawData;
+  return mulawData;
 }
 
 // ==================== ROUTES ====================
@@ -112,15 +141,18 @@ fastify.get('/', async (request, reply) => {
   reply.send({ 
     message: '🎉 Eda Sesli Asistan Çalışıyor!',
     status: 'active',
-    voice: VOICE
+    voice: VOICE,
+    version: '3.0.0 - Sample Rate Fix'
   });
 });
 
 // Twilio incoming call handler
 fastify.all('/incoming-call', async (request, reply) => {
+  console.log('📞 Gelen arama alındı');
+  
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say language="tr-TR">Eda'ya bağlanıyorsunuz, lütfen bekleyin.</Say>
+  <Say language="tr-TR">Eda'ya bağlanıyorsunuz.</Say>
   <Connect>
     <Stream url="wss://${request.headers.host}/media-stream" />
   </Connect>
@@ -133,23 +165,21 @@ fastify.all('/incoming-call', async (request, reply) => {
 
 fastify.register(async (fastify) => {
   fastify.get('/media-stream', { websocket: true }, (connection, req) => {
-    console.log('📞 Yeni çağrı bağlantısı kuruldu!');
+    console.log('🎉 WebSocket bağlantısı kuruldu!');
     
     // Connection state
     let streamSid = null;
     let latestMediaTimestamp = 0;
     let sessionConfigured = false;
     
-    // Audio state tracking
+    // Audio tracking
     let lastAssistantItem = null;
-    let markQueue = [];
     let responseStartTimestamp = null;
     let isAssistantSpeaking = false;
     let isUserSpeaking = false;
     
     // Interruption handling
-    let interruptionStartTime = null;
-    const MIN_INTERRUPTION_TIME = 500; // 500ms minimum kesinti süresi
+    let audioChunkCount = 0;
     
     // OpenAI WebSocket connection
     const openAiWs = new WebSocket(
@@ -162,46 +192,22 @@ fastify.register(async (fastify) => {
       }
     );
     
-    // Send mark event to track audio playback
-    const sendMark = () => {
-      if (streamSid) {
-        const markEvent = {
-          event: 'mark',
-          streamSid: streamSid,
-          mark: { name: 'audio_chunk' }
-        };
-        connection.send(JSON.stringify(markEvent));
-        markQueue.push('audio_chunk');
-      }
-    };
-    
-    // Clear Twilio buffer
-    const clearTwilioBuffer = () => {
-      if (streamSid) {
-        connection.send(JSON.stringify({
-          event: 'clear',
-          streamSid: streamSid
-        }));
-        markQueue = [];
-      }
-    };
-    
-    // Configure OpenAI session
+    // Configure OpenAI session with CORRECT audio formats
     const configureSession = () => {
       const sessionConfig = {
         type: 'session.update',
         session: {
-          // Optimize edilmiş VAD ayarları
+          // VAD ayarları
           turn_detection: {
             type: 'server_vad',
             threshold: 0.5,
             prefix_padding_ms: 300,
-            silence_duration_ms: 700
+            silence_duration_ms: 600
           },
-          // Ses formatları - kritik!
-          input_audio_format: 'g711_ulaw',
-          output_audio_format: 'pcm16',
-          // Ses ve model ayarları
+          // KRİTİK: Audio format ayarları
+          input_audio_format: 'g711_ulaw', // Twilio'dan gelen format
+          output_audio_format: 'pcm16',    // OpenAI'den 24kHz PCM16 alacağız
+          // Diğer ayarlar
           voice: VOICE,
           instructions: SYSTEM_MESSAGE,
           modalities: ['text', 'audio'],
@@ -211,15 +217,17 @@ fastify.register(async (fastify) => {
       };
       
       console.log('⚙️ OpenAI oturumu yapılandırılıyor...');
+      console.log('📊 Audio format: Input=g711_ulaw 8kHz, Output=pcm16 24kHz');
+      
       openAiWs.send(JSON.stringify(sessionConfig));
       sessionConfigured = true;
       
-      // İlk karşılama mesajını gönder
+      // İlk karşılama
       setTimeout(() => {
         const greetings = [
-          "Merhaba! Ben Eda... ee, nasılsın?",
-          "Ayy selam! Ben Eda, hoş geldin!",
-          "Merhaba canım! Nasıl gidiyor?"
+          "Merhaba! Ben Eda... nasılsın?",
+          "Ayy selam! Hoş geldin!",
+          "Merhaba canım! Neler yapıyorsun?"
         ];
         
         const greeting = greetings[Math.floor(Math.random() * greetings.length)];
@@ -238,41 +246,37 @@ fastify.register(async (fastify) => {
         
         openAiWs.send(JSON.stringify(initialMessage));
         openAiWs.send(JSON.stringify({ type: 'response.create' }));
+        console.log('👋 İlk karşılama gönderildi');
       }, 250);
     };
     
     // Handle user interruption
     const handleUserInterruption = () => {
       if (isAssistantSpeaking && lastAssistantItem) {
-        const now = Date.now();
+        console.log('🔪 Kullanıcı sözü kesti, temizleniyor...');
         
-        // Minimum kesinti süresini kontrol et
-        if (!interruptionStartTime) {
-          interruptionStartTime = now;
-          return;
+        // Truncate OpenAI response
+        const truncateEvent = {
+          type: 'conversation.item.truncate',
+          item_id: lastAssistantItem,
+          content_index: 0,
+          audio_end_ms: audioChunkCount * 20 // Approximate timing
+        };
+        openAiWs.send(JSON.stringify(truncateEvent));
+        
+        // Clear Twilio buffer
+        if (streamSid) {
+          connection.send(JSON.stringify({
+            event: 'clear',
+            streamSid: streamSid
+          }));
         }
         
-        if (now - interruptionStartTime >= MIN_INTERRUPTION_TIME) {
-          console.log('🔪 Kullanıcı sözü kesti');
-          
-          // OpenAI'ye kesinti bildir
-          const truncateEvent = {
-            type: 'conversation.item.truncate',
-            item_id: lastAssistantItem,
-            content_index: 0,
-            audio_end_ms: Math.floor((latestMediaTimestamp - responseStartTimestamp) * 0.8)
-          };
-          openAiWs.send(JSON.stringify(truncateEvent));
-          
-          // Twilio buffer'ı temizle
-          clearTwilioBuffer();
-          
-          // State'i sıfırla
-          lastAssistantItem = null;
-          responseStartTimestamp = null;
-          isAssistantSpeaking = false;
-          interruptionStartTime = null;
-        }
+        // Reset state
+        lastAssistantItem = null;
+        responseStartTimestamp = null;
+        isAssistantSpeaking = false;
+        audioChunkCount = 0;
       }
     };
     
@@ -288,7 +292,9 @@ fastify.register(async (fastify) => {
         const response = JSON.parse(data);
         
         if (LOG_EVENT_TYPES.includes(response.type)) {
-          console.log(`📨 Event: ${response.type}`);
+          if (response.type !== 'response.audio.delta') {
+            console.log(`📨 OpenAI Event: ${response.type}`);
+          }
         }
         
         switch (response.type) {
@@ -296,41 +302,79 @@ fastify.register(async (fastify) => {
             console.log('✅ Oturum oluşturuldu');
             break;
             
+          case 'session.updated':
+            console.log('✅ Oturum güncellendi');
+            break;
+            
           case 'response.audio.delta':
             if (response.delta) {
               isAssistantSpeaking = true;
+              audioChunkCount++;
               
-              // Track response start time
+              // Track response start
               if (!responseStartTimestamp) {
                 responseStartTimestamp = latestMediaTimestamp;
                 console.log('🎤 Eda konuşmaya başladı');
               }
               
-              // Store item ID for interruption handling
+              // Store item ID for interruption
               if (response.item_id) {
                 lastAssistantItem = response.item_id;
               }
               
-              // Convert PCM16 to μ-law
-              const pcm16Buffer = Buffer.from(response.delta, 'base64');
-              const ulawBuffer = pcm16ToUlaw(pcm16Buffer);
-              const ulawBase64 = ulawBuffer.toString('base64');
+              // CRITICAL: Audio format conversion pipeline
+              // 1. OpenAI sends: 24kHz PCM16 (base64)
+              // 2. Decode base64 -> Buffer
+              // 3. Downsample: 24kHz -> 8kHz
+              // 4. Convert: PCM16 -> μ-law
+              // 5. Encode: Buffer -> base64
+              // 6. Send to Twilio
               
-              // Send audio to Twilio
+              const pcm16_24khz = Buffer.from(response.delta, 'base64');
+              
+              if (DEBUG_AUDIO && audioChunkCount === 1) {
+                console.log(`🔊 İlk audio chunk: ${pcm16_24khz.length} bytes @ 24kHz`);
+              }
+              
+              // Downsample from 24kHz to 8kHz
+              const pcm16_8khz = downsample24to8(pcm16_24khz);
+              
+              if (DEBUG_AUDIO && audioChunkCount === 1) {
+                console.log(`🔊 Downsampled: ${pcm16_8khz.length} bytes @ 8kHz`);
+              }
+              
+              // Convert to μ-law
+              const mulaw_8khz = pcm16ToMulaw(pcm16_8khz);
+              
+              if (DEBUG_AUDIO && audioChunkCount === 1) {
+                console.log(`🔊 μ-law converted: ${mulaw_8khz.length} bytes`);
+              }
+              
+              // Send to Twilio
               const audioMessage = {
                 event: 'media',
                 streamSid: streamSid,
-                media: { payload: ulawBase64 }
+                media: { 
+                  payload: mulaw_8khz.toString('base64')
+                }
               };
               connection.send(JSON.stringify(audioMessage));
               
-              // Send mark for tracking
-              sendMark();
+              // Send mark event for tracking
+              if (audioChunkCount % 5 === 0) { // Every 5 chunks
+                const markEvent = {
+                  event: 'mark',
+                  streamSid: streamSid,
+                  mark: { name: `chunk_${audioChunkCount}` }
+                };
+                connection.send(JSON.stringify(markEvent));
+              }
             }
             break;
             
           case 'response.done':
             isAssistantSpeaking = false;
+            audioChunkCount = 0;
             console.log('✅ Eda konuşmayı bitirdi');
             break;
             
@@ -342,7 +386,6 @@ fastify.register(async (fastify) => {
             
           case 'input_audio_buffer.speech_stopped':
             isUserSpeaking = false;
-            interruptionStartTime = null;
             console.log('🔇 Kullanıcı konuşmayı bitirdi');
             break;
             
@@ -351,7 +394,7 @@ fastify.register(async (fastify) => {
             break;
         }
       } catch (error) {
-        console.error('❌ OpenAI mesaj işleme hatası:', error, 'Data:', data.toString());
+        console.error('❌ OpenAI mesaj işleme hatası:', error);
       }
     });
     
@@ -373,9 +416,8 @@ fastify.register(async (fastify) => {
           case 'start':
             streamSid = data.start.streamSid;
             console.log('📞 Twilio stream başladı:', streamSid);
-            console.log('📊 Çağrı detayları:', {
+            console.log('📊 Arama detayları:', {
               callSid: data.start.callSid,
-              accountSid: data.start.accountSid,
               from: data.start.customParameters?.from || 'Bilinmiyor',
               to: data.start.customParameters?.to || 'Bilinmiyor'
             });
@@ -384,20 +426,21 @@ fastify.register(async (fastify) => {
           case 'media':
             latestMediaTimestamp = data.media.timestamp;
             
-            // Forward audio to OpenAI (already in μ-law format)
+            // Forward μ-law 8kHz audio directly to OpenAI
+            // (OpenAI accepts g711_ulaw input)
             if (openAiWs.readyState === WebSocket.OPEN && sessionConfigured) {
               const audioAppend = {
                 type: 'input_audio_buffer.append',
-                audio: data.media.payload
+                audio: data.media.payload // Already in μ-law format from Twilio
               };
               openAiWs.send(JSON.stringify(audioAppend));
             }
             break;
             
           case 'mark':
-            // Remove processed mark from queue
-            if (markQueue.length > 0) {
-              markQueue.shift();
+            // Mark event received
+            if (DEBUG_AUDIO) {
+              console.log(`✓ Mark alındı: ${data.mark?.name}`);
             }
             break;
             
@@ -409,7 +452,7 @@ fastify.register(async (fastify) => {
             break;
             
           default:
-            // console.log('📨 Diğer Twilio event:', data.event);
+            // Ignore other events
             break;
         }
       } catch (error) {
@@ -439,19 +482,22 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   }
   
   console.log(`
-╔══════════════════════════════════════════════════╗
-║     🎉 EDA SESLİ ASİSTAN SUNUCUSU HAZIR! 🎉      ║
-╠══════════════════════════════════════════════════╣
-║                                                  ║
-║  📍 Port: ${PORT}                                  ║
-║  🎤 Ses: ${VOICE}                              ║
-║  👩 Karakter: Eda                                ║
-║  🏢 Firma: Ferled                                ║
-║  👨‍💻 Yaratıcı: Botan Özalp                       ║
-║                                                  ║
-║  ✅ Tüm sistemler hazır!                         ║
-║  📞 Aramalar bekleniyor...                       ║
-║                                                  ║
-╚══════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════╗
+║          🎉 EDA SESLİ ASİSTAN v3.0 HAZIR! 🎉                ║
+╠══════════════════════════════════════════════════════════════╣
+║                                                              ║
+║  📍 Port: ${PORT}                                              ║
+║  🎤 Ses: ${VOICE}                                          ║
+║  👩 Karakter: Eda                                            ║
+║  🏢 Firma: Ferled                                            ║
+║  👨‍💻 Yaratıcı: Botan Özalp                                   ║
+║                                                              ║
+║  🔧 Sample Rate Dönüşümü: 24kHz → 8kHz ✅                    ║
+║  🔧 Format Dönüşümü: PCM16 → μ-law ✅                        ║
+║                                                              ║
+║  ✅ Tüm sistemler hazır!                                     ║
+║  📞 Aramalar bekleniyor...                                   ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
   `);
 });
