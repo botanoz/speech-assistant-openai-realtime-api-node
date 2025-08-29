@@ -19,9 +19,9 @@ const NOISE_GATE_DBFS = Number(process.env.NOISE_GATE_DBFS ?? -40);
 const NOISE_GATE_OPEN_MS = Number(process.env.NOISE_GATE_OPEN_MS ?? 150);
 const NOISE_GATE_HANG_MS = Number(process.env.NOISE_GATE_HANG_MS ?? 350);
 const PREBUFFER_MS = Number(process.env.PREBUFFER_MS ?? 240);
-const MIN_COMMIT_MS = Number(process.env.MIN_COMMIT_MS ?? 140);
+const MIN_COMMIT_MS = Number(process.env.MIN_COMMIT_MS ?? 150);
 const POST_SILENCE_DEBOUNCE_MS = Number(process.env.POST_SILENCE_DEBOUNCE_MS ?? 600);
-const MIN_ASSISTANT_SPEAK_MS = Number(process.env.MIN_ASSISTANT_SPEAK_MS ?? 600);
+const MIN_ASSISTANT_SPEAK_MS = Number(process.env.MIN_ASSISTANT_SPEAK_MS ?? 800);
 const BACKCHANNEL_CHANCE = Number(process.env.BACKCHANNEL_CHANCE ?? 0.3);
 
 // Initialize Fastify
@@ -162,7 +162,7 @@ fastify.get('/', async (_request, reply) => {
     message: '🎉 Eda Sesli Asistan Çalışıyor!',
     status: 'active',
     voice: VOICE,
-    version: '3.2.0 - Gate+Hysteresis+IntentTokens+Backchannel+CallerID'
+    version: '3.2.1 - Fixed Interruption & Audio Buffer Issues'
   });
 });
 
@@ -200,6 +200,7 @@ fastify.register(async (fastify) => {
     let isAssistantSpeaking = false;
     let isUserSpeaking = false;
     let lastAssistantStartAt = 0;
+    let currentResponseId = null;
 
     // Interruption + audio stats
     let audioChunkCount = 0;
@@ -215,13 +216,14 @@ fastify.register(async (fastify) => {
     let currentCallerNumber = 'Bilinmiyor';
     let lastBackchannelAt = 0;
 
-    // Response control
+    // Response control - kritik state management
     let nextMaxTokens = 120;
     let bargeInTimer = null;
     let userSpeakingSince = null;
-    const BARGE_IN_MIN_MS = 240;
-    const BARGE_IN_GRACE_MS = 180;
+    const BARGE_IN_MIN_MS = 300;
+    const BARGE_IN_GRACE_MS = 200;
     let lastCommitAt = 0;
+    let pendingResponseCreate = false;
 
     // OpenAI WebSocket connection
     const openAiWs = new WebSocket(
@@ -241,9 +243,9 @@ fastify.register(async (fastify) => {
           // VAD ayarları (daha az yanlış tetikleme ve cümle tamamlama için)
           turn_detection: {
             type: 'server_vad',
-            threshold: 0.7,
-            prefix_padding_ms: 450,
-            silence_duration_ms: 1100
+            threshold: 0.6, // Biraz daha düşürüldü
+            prefix_padding_ms: 300,
+            silence_duration_ms: 800 // Daha kısa sessizlik süresi
           },
           input_audio_format: 'g711_ulaw',
           output_audio_format: 'pcm16',
@@ -259,7 +261,7 @@ fastify.register(async (fastify) => {
       openAiWs.send(JSON.stringify(sessionConfig));
       sessionConfigured = true;
 
-      // İlk karşılama
+      // İlk karşılama - DÜZELT: 'input_text' yerine 'text'
       setTimeout(() => {
         const greetings = [
           "Merhaba! Ben Eda... nasılsın?",
@@ -267,37 +269,77 @@ fastify.register(async (fastify) => {
           "Merhaba canım! Neler yapıyorsun?"
         ];
         const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+        
+        // Doğru format kullan
         openAiWs.send(JSON.stringify({
           type: 'conversation.item.create',
-          item: { type: 'message', role: 'assistant', content: [{ type: 'input_text', text: greeting }] }
+          item: { 
+            type: 'message', 
+            role: 'assistant', 
+            content: [{ type: 'text', text: greeting }] // 'input_text' değil 'text'
+          }
         }));
-        openAiWs.send(JSON.stringify({ type: 'response.create', response: { max_output_tokens: nextMaxTokens } }));
+        
+        // Response create et
+        if (!pendingResponseCreate) {
+          pendingResponseCreate = true;
+          openAiWs.send(JSON.stringify({ 
+            type: 'response.create', 
+            response: { max_output_tokens: nextMaxTokens } 
+          }));
+        }
+        
         console.log('👋 İlk karşılama gönderildi');
       }, 250);
     };
 
-    // Kesme
+    // Güvenli response create
+    const safeCreateResponse = () => {
+      if (!pendingResponseCreate && !isAssistantSpeaking) {
+        pendingResponseCreate = true;
+        openAiWs.send(JSON.stringify({
+          type: 'response.create',
+          response: { max_output_tokens: nextMaxTokens }
+        }));
+        console.log('📤 Yeni response oluşturuldu');
+      } else {
+        console.log('⏳ Response zaten beklemede, atlaniyor');
+      }
+    };
+
+    // Kesme - iyileştirildi
     const handleUserInterruption = () => {
-      if (isAssistantSpeaking && lastAssistantItem) {
+      if (isAssistantSpeaking && lastAssistantItem && currentResponseId) {
         // Asistan çok erken başladıysa hemen kesme (min konuşma süresi)
         const now = Date.now();
-        if (now - lastAssistantStartAt < MIN_ASSISTANT_SPEAK_MS) return;
+        const speakingDuration = now - lastAssistantStartAt;
+        
+        if (speakingDuration < MIN_ASSISTANT_SPEAK_MS) {
+          console.log(`⏰ Asistan henüz ${speakingDuration}ms konuştu, minimum ${MIN_ASSISTANT_SPEAK_MS}ms bekle`);
+          return;
+        }
 
         console.log('🔪 Kullanıcı sözü kesti, asistan cevabı iptal ediliyor...');
-        openAiWs.send(JSON.stringify({
-          type: 'conversation.item.truncate',
-          item_id: lastAssistantItem,
-          content_index: 0,
-          audio_end_ms: audioChunkCount * 20
-        }));
-        openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
+        
+        // Önce response'u iptal et
+        if (currentResponseId) {
+          openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
+          console.log('❌ Response iptal edildi');
+        }
+        
+        // Sonra Twilio buffer'ını temizle
         if (streamSid) {
           connection.send(JSON.stringify({ event: 'clear', streamSid }));
+          console.log('🧹 Twilio buffer temizlendi');
         }
+        
+        // State'i resetle
         lastAssistantItem = null;
         responseStartTimestamp = null;
         isAssistantSpeaking = false;
         audioChunkCount = 0;
+        currentResponseId = null;
+        pendingResponseCreate = false;
       }
     };
 
@@ -336,14 +378,23 @@ fastify.register(async (fastify) => {
             console.log('✅ Oturum güncellendi');
             break;
 
+          case 'response.created':
+            currentResponseId = response.response?.id;
+            pendingResponseCreate = false;
+            console.log(`✅ Response oluşturuldu: ${currentResponseId}`);
+            break;
+
           case 'response.audio.delta':
             if (response.delta) {
-              isAssistantSpeaking = true;
+              if (!isAssistantSpeaking) {
+                isAssistantSpeaking = true;
+                lastAssistantStartAt = Date.now();
+                console.log('🎤 Eda konuşmaya başladı');
+              }
+              
               audioChunkCount++;
               if (!responseStartTimestamp) {
                 responseStartTimestamp = latestMediaTimestamp;
-                lastAssistantStartAt = Date.now();
-                console.log('🎤 Eda konuşmaya başladı');
               }
               if (response.item_id) {
                 lastAssistantItem = response.item_id;
@@ -362,21 +413,32 @@ fastify.register(async (fastify) => {
             }
             break;
 
+          case 'response.audio.done':
+            console.log('🎵 Ses yanıtı tamamlandı');
+            break;
+
           case 'response.done':
             isAssistantSpeaking = false;
             audioChunkCount = 0;
+            currentResponseId = null;
+            pendingResponseCreate = false;
             console.log('✅ Eda konuşmayı bitirdi');
             break;
 
           case 'input_audio_buffer.speech_started':
             isUserSpeaking = true;
             console.log('🎙️ Kullanıcı konuşmaya başladı');
+            
             if (isAssistantSpeaking) {
               clearTimeout(bargeInTimer);
               userSpeakingSince = Date.now();
+              
+              // Interrupt logic - biraz gecikme ekle
               bargeInTimer = setTimeout(() => {
                 const dur = Date.now() - (userSpeakingSince || Date.now());
-                if (dur >= BARGE_IN_MIN_MS) handleUserInterruption();
+                if (dur >= BARGE_IN_MIN_MS && isAssistantSpeaking) {
+                  handleUserInterruption();
+                }
               }, BARGE_IN_GRACE_MS);
             }
             break;
@@ -386,18 +448,22 @@ fastify.register(async (fastify) => {
             console.log('🔇 Kullanıcı konuşmayı bitirdi');
 
             // Sessizlikte küçük bekleme + commit yalnızca yeterli audio varsa
-            const now = Date.now();
             const doCommit = () => {
+              console.log(`💭 Commit kontrolü: uncommittedMs=${uncommittedMs}, min=${MIN_COMMIT_MS}`);
+              
               if (uncommittedMs >= MIN_COMMIT_MS) {
+                console.log('📝 Audio buffer commit ediliyor...');
                 openAiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
                 lastCommitAt = Date.now();
                 uncommittedMs = 0;
+                
+                // Commit'ten sonra response iste
+                setTimeout(() => {
+                  safeCreateResponse();
+                }, 100);
+              } else {
+                console.log('⚠️ Yeterli audio yok, commit atlanıyor');
               }
-              // Yanıtı niyete göre iste
-              openAiWs.send(JSON.stringify({
-                type: 'response.create',
-                response: { max_output_tokens: nextMaxTokens }
-              }));
             };
 
             setTimeout(doCommit, POST_SILENCE_DEBOUNCE_MS);
@@ -408,6 +474,17 @@ fastify.register(async (fastify) => {
 
           case 'error':
             console.error('❌ OpenAI Hatası:', response.error);
+            
+            // Özel hata handling
+            if (response.error?.code === 'input_audio_buffer_commit_empty') {
+              console.log('🔧 Buffer boş hatası - uncommittedMs sıfırlanıyor');
+              uncommittedMs = 0;
+            }
+            
+            if (response.error?.code === 'conversation_already_has_active_response') {
+              console.log('🔧 Aktif response var - flag sıfırlanıyor');
+              pendingResponseCreate = false;
+            }
             break;
         }
       } catch (error) {
@@ -430,21 +507,33 @@ fastify.register(async (fastify) => {
         const data = JSON.parse(message);
 
         switch (data.event) {
-          case 'start':
+          case 'start': {
             streamSid = data.start.streamSid;
-            // customParameters: [{name, value}, ...]
-            const params = (data.start.customParameters || []).reduce((acc, p) => {
-              acc[p.name] = p.value;
-              return acc;
-            }, {});
+            
+            // CustomParameters handling - DÜZELT: safely handle
+            let params = {};
+            try {
+              if (data.start.customParameters && Array.isArray(data.start.customParameters)) {
+                params = data.start.customParameters.reduce((acc, p) => {
+                  if (p && p.name && p.value) {
+                    acc[p.name] = p.value;
+                  }
+                  return acc;
+                }, {});
+              }
+            } catch (err) {
+              console.warn('⚠️ CustomParameters parse hatası:', err);
+            }
+            
             currentCallerNumber = params.from || data.start?.from || 'Bilinmiyor';
             console.log('📞 Twilio stream başladı:', streamSid);
             console.log('📊 Arama detayları:', {
-              callSid: params.callSid || data.start.callSid,
+              callSid: params.callSid || data.start?.callSid || 'N/A',
               from: currentCallerNumber,
-              to: params.to || 'Bilinmiyor'
+              to: params.to || data.start?.to || 'Bilinmiyor'
             });
             break;
+          }
 
           case 'media': {
             latestMediaTimestamp = data.media.timestamp;
@@ -465,6 +554,7 @@ fastify.register(async (fastify) => {
             if (levelDb >= NOISE_GATE_DBFS) {
               if (!gateCandidateSince) gateCandidateSince = now;
               lastLoudAt = now;
+              
               if (!gateOpen && now - gateCandidateSince >= NOISE_GATE_OPEN_MS) {
                 gateOpen = true;
                 if (DEBUG_AUDIO) console.log(`🚪 Noise gate OPEN @ ${levelDb.toFixed(1)} dBFS`);
@@ -524,11 +614,6 @@ fastify.register(async (fastify) => {
     connection.on('error', (error) => {
       console.error('❌ Twilio WebSocket hatası:', error);
     });
-
-    // ===== Basit backchannel planlayıcı (kullanıcı uzun konuşup durduysa) =====
-    // Not: Bu örnekte backchannel tetiklemesini input_* event zincirine bağlamadık; 
-    // gerçek tetik için konuşma süreleri üzerinden yukarıda karar veriyoruz.
-    // Eğer ileride istersen, speech_stopped içinde duration’a göre % olasılıkla mini tepki yaratabilirsin.
   });
 });
 
@@ -541,7 +626,7 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   }
   console.log(`
 ╔══════════════════════════════════════════════════════════════╗
-║          🎉 EDA SESLİ ASİSTAN v3.2 HAZIR! 🎉                ║
+║          🎉 EDA SESLİ ASİSTAN v3.2.1 HAZIR! 🎉              ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  📍 Port: ${PORT}                                           ║
 ║  🎤 Ses: ${VOICE}                                           ║
@@ -549,8 +634,7 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
 ║  🔧 Prebuffer: ${PREBUFFER_MS}ms | MinCommit: ${MIN_COMMIT_MS}ms
 ║  🔧 Barge-in: ≥${MIN_ASSISTANT_SPEAK_MS}ms asistan süresi şartı
 ║  🔧 Yanıt token: intent-based (60/120/220)
-║  ☎️ CallerID: TwiML <Parameter> ile aktarılıyor
-║  ✅ Tüm sistemler hazır!                                     ║
+║  ✅ Interrupt handling ve audio buffer sorunları düzeltildi!║
 ╚══════════════════════════════════════════════════════════════╝
   `);
 });
